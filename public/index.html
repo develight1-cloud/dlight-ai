@@ -21,6 +21,12 @@
 
     <main class="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-2xl space-y-4">
         
+        <!-- Account email input (Admin bypass enabled) -->
+        <div>
+            <label class="block text-sm font-semibold text-gray-300 mb-1">Account email</label>
+            <input id="email" type="email" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-gray-200 focus:outline-none focus:border-amber-400" placeholder="name@youremail.com">
+        </div>
+
         <div>
             <label class="block text-sm font-semibold text-gray-300 mb-1">Video prompt</label>
             <textarea id="prompt" rows="3" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-gray-200 focus:outline-none focus:border-cyan-500 resize-none" placeholder="Describe the scene you want the AI to render..."></textarea>
@@ -131,6 +137,7 @@
 
         async function generateVideo() {
             const prompt = document.getElementById('prompt').value;
+            const email = document.getElementById('email') ? document.getElementById('email').value : '';
             if(!prompt) return alert("Please enter a prompt or tap an inspiration card!");
 
             const btn = document.getElementById('generateBtn');
@@ -154,10 +161,10 @@
             }, 150);
 
             try {
-                const response = await fetch('/api/generate', {
+                const response = await fetch('/api/generate-video', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ prompt })
+                    body: JSON.stringify({ prompt, duration: document.getElementById('duration').value, style: document.getElementById('style').value, email })
                 });
                 const data = await response.json();
 
