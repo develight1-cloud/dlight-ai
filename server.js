@@ -16,8 +16,8 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Admin bypass list
-const ADMIN_EMAILS = ['david@davidsun.site'];
+// Admin secret (set via environment variable ADMIN_SECRET_KEY)
+const ADMIN_SECRET = process.env.ADMIN_SECRET_KEY || null;
 
 // AI Mock Generation Route (legacy)
 app.post('/api/generate', (req, res) => {
@@ -37,16 +37,16 @@ app.post('/api/generate', (req, res) => {
     }, 3000);
 });
 
-// New endpoint: generate-video with admin email bypass
+// New endpoint: generate-video with admin secret-key bypass
 app.post('/api/generate-video', (req, res) => {
-    const { prompt, duration, style, email } = req.body;
+    const { prompt, duration, style, email, admin_key } = req.body;
 
     if (!prompt) {
         return res.status(400).json({ error: 'Prompt is required' });
     }
 
-    // If the email is in the admin bypass list, immediately return the streaming-optimized test video
-    if (email && ADMIN_EMAILS.includes(String(email).toLowerCase())) {
+    // If admin_key is provided and matches server ADMIN_SECRET, bypass payment and return streaming test video
+    if (admin_key && ADMIN_SECRET && String(admin_key) === String(ADMIN_SECRET)) {
         const adminVideoUrl = "https://www.w3schools.com/html/mov_bbb.mp4";
         return res.json({ success: true, video_url: adminVideoUrl, bypass: true });
     }
