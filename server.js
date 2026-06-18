@@ -34,6 +34,70 @@ app.post('/api/generate', (req, res) => {
     }, 3000);
 });
 
+// Return public configuration (public Flutterwave key)
+app.get('/api/config', (req, res) => {
+    return res.json({
+        flutterwave_public_key: process.env.FLW_PUBLIC_KEY || null
+    });
+});
+
+// Verify a transaction by Flutterwave transaction ID
+app.get('/api/verify/transaction/:id', async (req, res) => {
+    const { id } = req.params;
+    const secret = process.env.FLW_SECRET_KEY;
+
+    if (!secret) return res.status(500).json({ error: 'Server not configured with FLW_SECRET_KEY' });
+
+    try {
+        const resp = await fetch(`https://api.flutterwave.com/v3/transactions/${encodeURIComponent(id)}/verify`, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${secret}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        const data = await resp.json();
+        return res.status(resp.status).json(data);
+    } catch (err) {
+        console.error('Error verifying transaction by id:', err);
+        return res.status(502).json({ error: 'Failed to contact Flutterwave' });
+    }
+});
+
+// Verify a transaction by tx_ref (query param)
+app.get('/api/verify', async (req, res) => {
+    const { tx_ref } = req.query;
+    const secret = process.env.FLW_SECRET_KEY;
+
+    if (!tx_ref) return res.status(400).json({ error: 'tx_ref is required' });
+    if (!secret) return res.status(500).json({ error: 'Server not configured with FLW_SECRET_KEY' });
+
+    try {
+        const resp = await fetch(`https://api.flutterwave.com/v3/transactions?tx_ref=${encodeURIComponent(tx_ref)}`, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${secret}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        const data = await resp.json();
+        return res.status(resp.status).json(data);
+    } catch (err) {
+        console.error('Error verifying transaction by tx_ref:', err);
+        return res.status(502).json({ error: 'Failed to contact Flutterwave' });
+    }
+});
+
+// Simple webhook receiver for Flutterwave (logs payload).
+// NOTE: For production you should verify webhook signatures per Flutterwave docs.
+app.post('/api/webhook/flutterwave', (req, res) => {
+    console.log('Received Flutterwave webhook:', JSON.stringify(req.body));
+    // Respond quickly to acknowledge receipt
+    res.status(200).send('ok');
+});
+
 // Fallback to serve index.html for all pages
 app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
