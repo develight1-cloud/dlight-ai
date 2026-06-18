@@ -23,7 +23,7 @@
         
         <div>
             <label class="block text-sm font-semibold text-gray-300 mb-1">Video prompt</label>
-            <textarea id="prompt" rows="3" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-gray-200 focus:outline-none focus:border-cyan-500 resize-none" placeholder="Describe the masterpiece you want to create..."></textarea>
+            <textarea id="prompt" rows="3" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-gray-200 focus:outline-none focus:border-cyan-500 resize-none" placeholder="Describe the scene you want the AI to render..."></textarea>
         </div>
 
         <div class="grid grid-cols-2 gap-3">
@@ -44,7 +44,7 @@
             </div>
         </div>
 
-        <button id="generateBtn" onclick="generateVideo()" class="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold py-3 px-4 rounded-xl shadow-lg transition duration-200 active:scale-95 text-sm tracking-wide">
+        <button id="generateBtn" onclick="generateVideo()" class="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold py-3 px-4 rounded-xl">
             Generate Video
         </button>
 
@@ -98,11 +98,11 @@
     <section class="w-full max-w-md mt-8 space-y-4">
         <h2 class="text-lg font-bold text-gray-200 pl-1">Inspiration Gallery</h2>
         <div class="grid grid-cols-2 gap-3">
-            <div onclick="selectGalleryCard('Cyberpunk Tokyo street at night, neon reflections', 'Cinematic')" class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-lg active:scale-98 transition p-1 cursor-pointer">
+            <div onclick="selectGalleryCard('Cyberpunk Tokyo street at night, neon reflections', 'Cinematic')" class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-lg cursor-pointer">
                 <img src="https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=400&auto=format&fit=crop&q=60" class="w-full aspect-video object-cover rounded-lg">
                 <div class="p-2"><p class="text-xs font-bold text-gray-200 truncate">Cyberpunk Neon</p></div>
             </div>
-            <div onclick="selectGalleryCard('Mythical golden dragon soaring over clouds', '3D Animation')" class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-lg active:scale-98 transition p-1 cursor-pointer">
+            <div onclick="selectGalleryCard('Mythical golden dragon soaring over clouds', '3D Animation')" class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-lg cursor-pointer">
                 <img src="https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?w=400&auto=format&fit=crop&q=60" class="w-full aspect-video object-cover rounded-lg">
                 <div class="p-2"><p class="text-xs font-bold text-gray-200 truncate">Golden Dragon</p></div>
             </div>
@@ -110,6 +110,19 @@
     </section>
 
     <script>
+        // Initialize client-side configuration by fetching server-provided config
+        async function loadConfig() {
+            try {
+                const res = await fetch('/api/config');
+                if (!res.ok) return;
+                const cfg = await res.json();
+                window.FLW_PUBLIC_KEY = cfg.flutterwave_public_key || null;
+            } catch (err) {
+                console.warn('Failed to load /api/config:', err);
+            }
+        }
+        loadConfig();
+
         function selectGalleryCard(promptText, styleValue) {
             document.getElementById('prompt').value = promptText;
             document.getElementById('style').value = styleValue;
@@ -172,8 +185,11 @@
         }
 
         function payWithFlutterwave(selectedAmount, planName) {
+            // Use server-provided public key if available, fallback to a harmless placeholder
+            const publicKey = window.FLW_PUBLIC_KEY || "FLWPUBK_TEST-PLACEHOLDER";
+
             FlutterwaveCheckout({
-                public_key: "FLWPUBK_TEST-XXXXX-X", // Replace with real key later
+                public_key: publicKey,
                 tx_ref: "dlight-" + Date.now(),
                 amount: selectedAmount,
                 currency: "USD",
