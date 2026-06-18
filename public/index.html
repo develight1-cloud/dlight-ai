@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DLiGHT AI - Mobile Video Generator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://checkout.flutterwave.com/v3.js"></script>
+    <style>
+        body { background-color: #0b0f19; color: #f3f4f6; }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center p-4 pb-12">
+
+    <header class="w-full max-w-md text-center my-6">
+        <h1 class="text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-500 tracking-tight">
+            DLiGHT AI
+        </h1>
+        <p class="text-xs text-gray-400 mt-1 uppercase tracking-widest">Premium Mobile AI Video Engine</p>
+    </header>
+
+    <main class="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-2xl space-y-4">
+        
+        <div>
+            <label class="block text-sm font-semibold text-gray-300 mb-1">Video prompt</label>
+            <textarea id="prompt" rows="3" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-gray-200 focus:outline-none focus:border-cyan-500 resize-none" placeholder="Describe the masterpiece you want to create..."></textarea>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+            <div>
+                <label class="block text-xs text-gray-400 mb-1">Duration</label>
+                <select id="duration" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-sm text-gray-300 focus:outline-none">
+                    <option value="5s">5 Seconds</option>
+                    <option value="10s">10 Seconds</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-xs text-gray-400 mb-1">Style</label>
+                <select id="style" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-sm text-gray-300 focus:outline-none">
+                    <option value="Cinematic">Cinematic</option>
+                    <option value="3D Animation">3D Animation</option>
+                    <option value="Anime">Anime</option>
+                </select>
+            </div>
+        </div>
+
+        <button id="generateBtn" onclick="generateVideo()" class="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold py-3 px-4 rounded-xl shadow-lg transition duration-200 active:scale-95 text-sm tracking-wide">
+            Generate Video
+        </button>
+
+        <div id="loadingState" class="hidden space-y-2">
+            <div class="flex justify-between text-xs text-cyan-400">
+                <span>AI Processing Engine rendering...</span>
+                <span id="progressText">0%</span>
+            </div>
+            <div class="w-full bg-slate-950 h-2 rounded-full overflow-hidden">
+                <div id="progressBar" class="bg-gradient-to-r from-cyan-400 to-blue-500 h-full w-0 transition-all duration-200"></div>
+            </div>
+        </div>
+
+        <div id="playerContainer" class="hidden border border-slate-800 bg-slate-950 rounded-xl overflow-hidden p-2">
+            <video id="videoPlayer" class="w-full aspect-video rounded-lg" controls playsinline></video>
+        </div>
+    </main>
+
+    <section class="w-full max-w-md bg-slate-900 border border-amber-500/20 rounded-2xl p-5 mt-6 shadow-2xl space-y-4">
+        <div class="text-center">
+            <div class="inline-block bg-amber-500/10 text-amber-400 text-xs font-bold px-2.5 py-1 rounded-full uppercase tracking-wider mb-2">
+                Premium Global Access
+            </div>
+            <h3 class="text-lg font-bold text-gray-100">Pick Your Pro Plan</h3>
+            <p class="text-xs text-gray-400">Strictly no free tiers. Renders convert to local currency seamlessly.</p>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+            <div class="bg-slate-950 border border-slate-800 rounded-xl p-3 flex flex-col justify-between text-center">
+                <div>
+                    <h4 class="text-sm font-bold text-gray-200">Standard Plan</h4>
+                    <p class="text-xl font-extrabold text-cyan-400 mt-1">$19<span class="text-xs font-normal text-gray-500">/mo</span></p>
+                </div>
+                <button onclick="payWithFlutterwave(19, 'Standard Premium')" class="mt-3 w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-2 px-1 rounded-lg text-xs transition">
+                    Select Plan
+                </button>
+            </div>
+
+            <div class="bg-slate-950 border border-slate-800 rounded-xl p-3 flex flex-col justify-between text-center">
+                <div>
+                    <h4 class="text-sm font-bold text-gray-200">Ultra Plan</h4>
+                    <p class="text-xl font-extrabold text-amber-400 mt-1">$49<span class="text-xs font-normal text-gray-500">/mo</span></p>
+                </div>
+                <button onclick="payWithFlutterwave(49, 'Ultra Premium')" class="mt-3 w-full bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold py-2 px-1 rounded-lg text-xs transition">
+                    Select Plan
+                </button>
+            </div>
+        </div>
+    </section>
+
+    <section class="w-full max-w-md mt-8 space-y-4">
+        <h2 class="text-lg font-bold text-gray-200 pl-1">Inspiration Gallery</h2>
+        <div class="grid grid-cols-2 gap-3">
+            <div onclick="selectGalleryCard('Cyberpunk Tokyo street at night, neon reflections', 'Cinematic')" class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-lg active:scale-98 transition p-1 cursor-pointer">
+                <img src="https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=400&auto=format&fit=crop&q=60" class="w-full aspect-video object-cover rounded-lg">
+                <div class="p-2"><p class="text-xs font-bold text-gray-200 truncate">Cyberpunk Neon</p></div>
+            </div>
+            <div onclick="selectGalleryCard('Mythical golden dragon soaring over clouds', '3D Animation')" class="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-lg active:scale-98 transition p-1 cursor-pointer">
+                <img src="https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?w=400&auto=format&fit=crop&q=60" class="w-full aspect-video object-cover rounded-lg">
+                <div class="p-2"><p class="text-xs font-bold text-gray-200 truncate">Golden Dragon</p></div>
+            </div>
+        </div>
+    </section>
+
+    <script>
+        function selectGalleryCard(promptText, styleValue) {
+            document.getElementById('prompt').value = promptText;
+            document.getElementById('style').value = styleValue;
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        async function generateVideo() {
+            const prompt = document.getElementById('prompt').value;
+            if(!prompt) return alert("Please enter a prompt or tap an inspiration card!");
+
+            const btn = document.getElementById('generateBtn');
+            const loader = document.getElementById('loadingState');
+            const bar = document.getElementById('progressBar');
+            const txt = document.getElementById('progressText');
+            const playerBox = document.getElementById('playerContainer');
+            const video = document.getElementById('videoPlayer');
+
+            btn.disabled = true;
+            playerBox.classList.add('hidden');
+            loader.classList.remove('hidden');
+
+            let progress = 0;
+            const progressInterval = setInterval(() => {
+                progress += 5;
+                if(progress <= 95) {
+                    bar.style.width = progress + '%';
+                    txt.innerText = progress + '%';
+                }
+            }, 150);
+
+            try {
+                const response = await fetch('/api/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt })
+                });
+                const data = await response.json();
+
+                clearInterval(progressInterval);
+                bar.style.width = '100%';
+                txt.innerText = '100%';
+
+                setTimeout(() => {
+                    loader.classList.add('hidden');
+                    playerBox.classList.remove('hidden');
+                    video.src = data.video_url;
+                    video.play();
+                    btn.disabled = false;
+                }, 400);
+
+            } catch (err) {
+                clearInterval(progressInterval);
+                alert("Connection failed. Running in standalone local offline preview mode.");
+                loader.classList.add('hidden');
+                playerBox.classList.remove('hidden');
+                video.src = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4";
+                video.play();
+                btn.disabled = false;
+            }
+        }
+
+        function payWithFlutterwave(selectedAmount, planName) {
+            FlutterwaveCheckout({
+                public_key: "FLWPUBK_TEST-XXXXX-X", // Replace with real key later
+                tx_ref: "dlight-" + Date.now(),
+                amount: selectedAmount,
+                currency: "USD",
+                payment_options: "card, ussd, account",
+                customer: { email: "subscriber@dlightai.com" },
+                customizations: {
+                    title: "DLiGHT AI " + planName,
+                    description: "No free tier engine subscription account registration",
+                },
+                callback: function(data) {
+                    alert("Payment successful for " + planName + "! Ref: " + data.tx_ref);
+                }
+            });
+        }
+    </script>
+</body>
+</html>
