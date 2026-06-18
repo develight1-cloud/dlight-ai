@@ -16,7 +16,10 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// AI Mock Generation Route
+// Admin bypass list
+const ADMIN_EMAILS = ['david@davidsun.site'];
+
+// AI Mock Generation Route (legacy)
 app.post('/api/generate', (req, res) => {
     const { prompt, duration, style } = req.body;
     
@@ -24,6 +27,31 @@ app.post('/api/generate', (req, res) => {
         return res.status(400).json({ error: 'Prompt is required' });
     }
 
+    const sampleVideoUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4";
+
+    setTimeout(() => {
+        return res.json({
+            success: true,
+            video_url: sampleVideoUrl
+        });
+    }, 3000);
+});
+
+// New endpoint: generate-video with admin email bypass
+app.post('/api/generate-video', (req, res) => {
+    const { prompt, duration, style, email } = req.body;
+
+    if (!prompt) {
+        return res.status(400).json({ error: 'Prompt is required' });
+    }
+
+    // If the email is in the admin bypass list, immediately return the streaming-optimized test video
+    if (email && ADMIN_EMAILS.includes(String(email).toLowerCase())) {
+        const adminVideoUrl = "https://www.w3schools.com/html/mov_bbb.mp4";
+        return res.json({ success: true, video_url: adminVideoUrl, bypass: true });
+    }
+
+    // Default mock behavior for non-admins (simulate processing)
     const sampleVideoUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4";
 
     setTimeout(() => {
