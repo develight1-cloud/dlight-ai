@@ -20,7 +20,8 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Config / secrets
-const ADMIN_SECRET = process.env.ADMIN_SECRET_KEY || null;
+// Use ADMIN_SECRET (Render) as requested; fall back to ADMIN_SECRET_KEY for compatibility
+const ADMIN_SECRET = process.env.ADMIN_SECRET || process.env.ADMIN_SECRET_KEY || null;
 const FLW_SECRET_HASH = process.env.FLW_SECRET_HASH || null;
 const DATABASE_URL = process.env.DATABASE_URL || null;
 const JWT_SECRET = process.env.JWT_SECRET || null; // secret used to sign admin JWTs
@@ -155,7 +156,7 @@ app.post('/api/generate-video', (req, res) => {
 app.post('/api/admin/login', (req, res) => {
   const { admin_key } = req.body;
   if (!admin_key) return res.status(400).json({ error: 'admin_key is required' });
-  if (!ADMIN_SECRET) return res.status(500).json({ error: 'Server not configured with ADMIN_SECRET_KEY' });
+  if (!ADMIN_SECRET) return res.status(500).json({ error: 'Server not configured with ADMIN_SECRET' });
   if (String(admin_key) !== String(ADMIN_SECRET)) return res.status(401).json({ error: 'Invalid admin credentials' });
   if (!JWT_SECRET) return res.status(500).json({ error: 'Server not configured with JWT_SECRET' });
 
