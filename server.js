@@ -60,12 +60,15 @@ const initDb = async () => {
   );
   `;
 
+  // users table: include legacy credits plus monthly allowance and bonus credits
   const createUsers = `
   CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
     email TEXT UNIQUE NOT NULL,
     plan TEXT,
     credits INTEGER DEFAULT 0,
+    monthly_credit_allowance INTEGER DEFAULT 0,
+    bonus_credits INTEGER DEFAULT 0,
     videos_generated INTEGER DEFAULT 0,
     subscription_status TEXT DEFAULT 'inactive',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT now()
@@ -166,7 +169,7 @@ const authenticateUser = async (req, res, next) => {
     const decoded = jwt.verify(token, JWT_SECRET);
     if (!decoded || decoded.role !== 'user' || !decoded.user_id) return res.status(403).json({ error: 'Forbidden' });
     // fetch user from DB
-    const userRes = await pool.query('SELECT id, email, plan, credits, videos_generated, subscription_status, created_at FROM users WHERE id = $1', [decoded.user_id]);
+    const userRes = await pool.query('SELECT id, email, plan, credits, monthly_credit_allowance, bonus_credits, videos_generated, subscription_status, created_at FROM users WHERE id = $1', [decoded.user_id]);
     if (userRes.rowCount === 0) return res.status(401).json({ error: 'User not found' });
     req.user = userRes.rows[0];
     next();
@@ -205,7 +208,7 @@ const CREDIT_COST = {
   60: 60
 };
 
-// Plan credits mapping
+// Plan credits mapping (monthly allowance values)
 const PLAN_CREDITS = {
   'Standard': 150,
   'Ultra': 500
@@ -252,24 +255,32 @@ app.post('/api/generate-video', async (req, res) => {
       await client.query('BEGIN');
 
       // lock user row FOR UPDATE to avoid race conditions
-      const userRow = await client.query('SELECT id, credits, videos_generated, subscription_status FROM users WHERE id = $1 FOR UPDATE', [userId]);
+      const userRow = await client.query('SELECT id, credits, monthly_credit_allowance, bonus_credits, videos_generated, subscription_status FROM users WHERE id = $1 FOR UPDATE', [userId]);
       if (userRow.rowCount === 0) {
         await client.query('ROLLBACK');
         return res.status(404).json({ error: 'User not found' });
       }
       const user = userRow.rows[0];
 
-      if (user.credits < cost) {
+      // compute available credits
+      const monthlyRemaining = user.monthly_credit_allowance || 0;
+      const bonusRemaining = user.bonus_credits || 0;
+      const available = (monthlyRemaining + bonusRemaining);
+
+      if (available < cost) {
         await client.query('ROLLBACK');
         return res.status(402).json({ error: 'Insufficient credits' });
       }
 
-      // Update user and insert history
-      const newUserRes = await client.query(
-        'UPDATE users SET credits = credits - $1, videos_generated = videos_generated + 1 WHERE id = $2 RETURNING credits, videos_generated',
-        [cost, userId]
+      // Deduct from monthly allowance first, then bonus credits
+      let deductFromMonthly = Math.min(monthlyRemaining, cost);
+      let deductFromBonus = cost - deductFromMonthly;
+
+      const updateRes = await client.query(
+        `UPDATE users SET monthly_credit_allowance = monthly_credit_allowance - $1, bonus_credits = bonus_credits - $2, videos_generated = videos_generated + 1 WHERE id = $3 RETURNING monthly_credit_allowance, bonus_credits, videos_generated`,
+        [deductFromMonthly, deductFromBonus, userId]
       );
-      const updated = newUserRes.rows[0];
+      const updated = updateRes.rows[0];
 
       // Insert history
       const sampleVideoUrl = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4';
@@ -282,10 +293,13 @@ app.post('/api/generate-video', async (req, res) => {
 
       // simulate processing delay for UX
       setTimeout(() => {
+        const availableNow = (updated.monthly_credit_allowance || 0) + (updated.bonus_credits || 0);
         return res.json({
           success: true,
           video_url: sampleVideoUrl,
-          credits_remaining: updated.credits,
+          credits_remaining: availableNow,
+          monthly_credit_allowance: updated.monthly_credit_allowance,
+          bonus_credits: updated.bonus_credits,
           videos_generated: updated.videos_generated
         });
       }, 2000);
@@ -324,17 +338,27 @@ app.post('/api/auth/login', async (req, res) => {
 
   try {
     // find or create user
-    const userRes = await pool.query('SELECT id, email, plan, credits, videos_generated, subscription_status FROM users WHERE email = $1', [email.toLowerCase()]);
+    const userRes = await pool.query('SELECT id, email, plan, credits, monthly_credit_allowance, bonus_credits, videos_generated, subscription_status FROM users WHERE email = $1', [email.toLowerCase()]);
     let user;
     if (userRes.rowCount === 0) {
-      const insert = await pool.query('INSERT INTO users (email, plan, credits, subscription_status) VALUES ($1, $2, $3, $4) RETURNING id, email, plan, credits, videos_generated, subscription_status', [email.toLowerCase(), null, 0, 'inactive']);
+      const insert = await pool.query('INSERT INTO users (email, plan, credits, monthly_credit_allowance, bonus_credits, subscription_status) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, email, plan, credits, monthly_credit_allowance, bonus_credits, videos_generated, subscription_status', [email.toLowerCase(), null, 0, 0, 0, 'inactive']);
       user = insert.rows[0];
     } else {
       user = userRes.rows[0];
     }
 
+    // If user has legacy credits and monthly_allowance is zero, migrate credits into monthly_credit_allowance (one-time)
+    if (user.monthly_credit_allowance === 0 && user.credits && user.credits > 0) {
+      try {
+        await pool.query('UPDATE users SET monthly_credit_allowance = $1 WHERE id = $2', [user.credits, user.id]);
+        user.monthly_credit_allowance = user.credits;
+      } catch (e) {
+        console.warn('Failed to migrate legacy credits for user', user.id, e);
+      }
+    }
+
     const token = jwt.sign({ role: 'user', user_id: user.id, email: user.email }, JWT_SECRET, { expiresIn: USER_JWT_EXPIRES });
-    return res.json({ token, user: { id: user.id, email: user.email, plan: user.plan, credits: user.credits, subscription_status: user.subscription_status } });
+    return res.json({ token, user: { id: user.id, email: user.email, plan: user.plan, monthly_credit_allowance: user.monthly_credit_allowance, bonus_credits: user.bonus_credits, subscription_status: user.subscription_status } });
   } catch (err) {
     console.error('Auth login error:', err);
     return res.status(500).json({ error: 'Server error' });
@@ -356,7 +380,7 @@ app.get('/api/verify/transaction/:id', async (req, res) => {
       method: 'GET',
       headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' }
     });
-    const data = await resp.json();
+    const data = await responseOrJson(resp);
     return res.status(resp.status).json(data);
   } catch (err) {
     console.error('Error verifying transaction by id:', err);
@@ -374,13 +398,22 @@ app.get('/api/verify', async (req, res) => {
       method: 'GET',
       headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' }
     });
-    const data = await resp.json();
+    const data = await responseOrJson(resp);
     return res.status(resp.status).json(data);
   } catch (err) {
     console.error('Error verifying transaction by tx_ref:', err);
     return res.status(502).json({ error: 'Failed to contact Flutterwave' });
   }
 });
+
+// Helper to safely parse fetch responses
+const responseOrJson = async (resp) => {
+  try {
+    return await resp.json();
+  } catch (e) {
+    return { status: resp.status, text: await resp.text() };
+  }
+};
 
 // Webhook verification and persistence to Postgres (protected by verif-hash)
 app.post('/api/webhook/flutterwave', async (req, res) => {
@@ -444,17 +477,17 @@ app.post('/api/webhook/flutterwave', async (req, res) => {
       }
 
       if (plan && PLAN_CREDITS[plan]) {
-        // Upsert user: set plan, assign credits, set subscription_status active
+        // Upsert user: set plan, reset monthly_credit_allowance to plan amount, keep bonus_credits unchanged, set subscription_status active
         const emailLower = customerEmail.toLowerCase();
         const creditsForPlan = PLAN_CREDITS[plan];
         const upsertSql = `
-          INSERT INTO users (email, plan, credits, subscription_status)
-          VALUES ($1, $2, $3, 'active')
-          ON CONFLICT (email) DO UPDATE SET plan = EXCLUDED.plan, credits = EXCLUDED.credits, subscription_status = 'active'
-          RETURNING id, email, plan, credits, subscription_status;
+          INSERT INTO users (email, plan, credits, monthly_credit_allowance, bonus_credits, subscription_status)
+          VALUES ($1, $2, $3, $4, $5, 'active')
+          ON CONFLICT (email) DO UPDATE SET plan = EXCLUDED.plan, monthly_credit_allowance = EXCLUDED.monthly_credit_allowance, credits = EXCLUDED.credits, subscription_status = 'active'
+          RETURNING id, email, plan, credits, monthly_credit_allowance, bonus_credits, subscription_status;
         `;
         try {
-          const upres = await pool.query(upsertSql, [emailLower, plan, creditsForPlan]);
+          const upres = await pool.query(upsertSql, [emailLower, plan, creditsForPlan, creditsForPlan, 0]);
           console.log('Updated user subscription from webhook:', upres.rows[0]);
         } catch (err) {
           console.error('Error upserting user on webhook:', err);
@@ -504,7 +537,8 @@ app.get('/api/admin/verified-transactions', authenticateJWT, async (req, res) =>
 app.get('/api/user/dashboard', authenticateUser, async (req, res) => {
   try {
     const u = req.user;
-    return res.json({ plan: u.plan, credits: u.credits, videos_generated: u.videos_generated, subscription_status: u.subscription_status });
+    const available = (u.monthly_credit_allowance || 0) + (u.bonus_credits || 0);
+    return res.json({ plan: u.plan, monthly_credit_allowance: u.monthly_credit_allowance, bonus_credits: u.bonus_credits, available_credits: available, videos_generated: u.videos_generated, subscription_status: u.subscription_status });
   } catch (err) {
     console.error('Error in user dashboard:', err);
     return res.status(500).json({ error: 'Server error' });
