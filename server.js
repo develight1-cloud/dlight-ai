@@ -87,11 +87,25 @@ const initDb = async () => {
   );
   `;
 
+  const createCreditsTransactions = `
+  CREATE TABLE IF NOT EXISTS credits_transactions (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    transaction_type TEXT NOT NULL,
+    credits_amount INTEGER NOT NULL,
+    balance_after INTEGER NOT NULL,
+    description TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+  );
+  `;
+
   await pool.query(createTransactions);
   await pool.query(createUsers);
   await pool.query(createVideoHistory);
+  await pool.query(createCreditsTransactions);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_transactions_received_at ON transactions(received_at DESC);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_video_history_user_id ON video_history(user_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_credits_tx_user_id ON credits_transactions(user_id);`);
 };
 
 initDb().catch((err) => {
@@ -175,6 +189,19 @@ const authenticateUser = async (req, res, next) => {
     next();
   } catch (err) {
     return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+};
+
+// Helper to insert a credits_transactions record. If a client is provided, use it (for transactional contexts)
+const recordCreditTransaction = async (opts) => {
+  // opts: { client?, user_id, transaction_type, credits_amount, balance_after, description }
+  const { client, user_id, transaction_type, credits_amount, balance_after, description } = opts;
+  const q = `INSERT INTO credits_transactions (user_id, transaction_type, credits_amount, balance_after, description) VALUES ($1, $2, $3, $4, $5)`;
+  const params = [user_id, transaction_type, credits_amount, balance_after, description || null];
+  if (client) {
+    await client.query(q, params);
+  } else {
+    await pool.query(q, params);
   }
 };
 
@@ -289,6 +316,10 @@ app.post('/api/generate-video', async (req, res) => {
         [userId, prompt, durationSeconds, cost, sampleVideoUrl]
       );
 
+      // Record credit transaction (video_generation)
+      const balanceAfter = (updated.monthly_credit_allowance || 0) + (updated.bonus_credits || 0);
+      await recordCreditTransaction({ client, user_id: userId, transaction_type: 'video_generation', credits_amount: -cost, balance_after: balanceAfter, description: `Generated ${durationSeconds}s video` });
+
       await client.query('COMMIT');
 
       // simulate processing delay for UX
@@ -330,7 +361,110 @@ app.post('/api/admin/login', (req, res) => {
   return res.json({ token, expires_in: ADMIN_JWT_EXPIRES });
 });
 
+// Admin: list users
+app.get('/api/admin/users', authenticateJWT, async (req, res) => {
+  try {
+    const rows = await pool.query('SELECT id, email, plan, credits, monthly_credit_allowance, bonus_credits, videos_generated, subscription_status, created_at FROM users ORDER BY created_at DESC');
+    const users = rows.rows.map(u => ({
+      ...u,
+      available_credits: (u.monthly_credit_allowance || 0) + (u.bonus_credits || 0)
+    }));
+    return res.json({ count: users.length, users });
+  } catch (err) {
+    console.error('Error fetching users:', err);
+    return res.status(500).json({ error: 'DB error' });
+  }
+});
+
+// Admin: get single user
+app.get('/api/admin/user/:id', authenticateJWT, async (req, res) => {
+  const userId = req.params.id;
+  try {
+    const row = await pool.query('SELECT id, email, plan, credits, monthly_credit_allowance, bonus_credits, videos_generated, subscription_status, created_at FROM users WHERE id = $1', [userId]);
+    if (row.rowCount === 0) return res.status(404).json({ error: 'User not found' });
+    const u = row.rows[0];
+    const available = (u.monthly_credit_allowance || 0) + (u.bonus_credits || 0);
+    return res.json({ user: u, available_credits: available });
+  } catch (err) {
+    console.error('Error fetching user:', err);
+    return res.status(500).json({ error: 'DB error' });
+  }
+});
+
+// Admin: grant bonus credits
+app.post('/api/admin/grant-credits', authenticateJWT, async (req, res) => {
+  const { user_id, amount, description } = req.body;
+  const amt = parseInt(amount, 10);
+  if (!user_id || isNaN(amt) || amt <= 0) return res.status(400).json({ error: 'user_id and positive amount are required' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // update bonus_credits
+    const up = await client.query('UPDATE users SET bonus_credits = bonus_credits + $1 WHERE id = $2 RETURNING bonus_credits, monthly_credit_allowance', [amt, user_id]);
+    if (up.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'User not found' });
+    }
+    const newBalance = (up.rows[0].monthly_credit_allowance || 0) + (up.rows[0].bonus_credits || 0);
+    // record transaction
+    await recordCreditTransaction({ client, user_id, transaction_type: 'admin_adjustment', credits_amount: amt, balance_after: newBalance, description: description || 'Admin granted bonus credits' });
+    await client.query('COMMIT');
+    return res.json({ success: true, user_id, bonus_credits: up.rows[0].bonus_credits, available_credits: newBalance });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Error granting credits:', err);
+    return res.status(500).json({ error: 'Server error' });
+  } finally {
+    client.release();
+  }
+});
+
+// Admin: revoke bonus credits
+app.post('/api/admin/revoke-credits', authenticateJWT, async (req, res) => {
+  const { user_id, amount, description } = req.body;
+  const amt = parseInt(amount, 10);
+  if (!user_id || isNaN(amt) || amt <= 0) return res.status(400).json({ error: 'user_id and positive amount are required' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // ensure sufficient bonus credits
+    const row = await client.query('SELECT bonus_credits, monthly_credit_allowance FROM users WHERE id = $1 FOR UPDATE', [user_id]);
+    if (row.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'User not found' });
+    }
+    const bonus = row.rows[0].bonus_credits || 0;
+    if (bonus < amt) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Insufficient bonus credits to revoke' });
+    }
+    const up = await client.query('UPDATE users SET bonus_credits = bonus_credits - $1 WHERE id = $2 RETURNING bonus_credits, monthly_credit_allowance', [amt, user_id]);
+    const newBalance = (up.rows[0].monthly_credit_allowance || 0) + (up.rows[0].bonus_credits || 0);
+    await recordCreditTransaction({ client, user_id, transaction_type: 'admin_adjustment', credits_amount: -amt, balance_after: newBalance, description: description || 'Admin revoked bonus credits' });
+    await client.query('COMMIT');
+    return res.json({ success: true, user_id, bonus_credits: up.rows[0].bonus_credits, available_credits: newBalance });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Error revoking credits:', err);
+    return res.status(500).json({ error: 'Server error' });
+  } finally {
+    client.release();
+  }
+});
+
+// User endpoint: credits history
+app.get('/api/user/credits-history', authenticateUser, async (req, res) => {
+  try {
+    const rows = await pool.query('SELECT id, transaction_type, credits_amount, balance_after, description, created_at FROM credits_transactions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1000', [req.user.id]);
+    return res.json({ count: rows.rowCount, transactions: rows.rows });
+  } catch (err) {
+    console.error('Error fetching credits history:', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // User auth: simple email login to issue JWT (production: replace with secure auth)
+// (kept near other auth code) -- unchanged functionality but ensure migration of legacy credits
 app.post('/api/auth/login', async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'Email is required' });
@@ -451,8 +585,10 @@ app.post('/api/webhook/flutterwave', async (req, res) => {
     const receivedAt = new Date().toISOString();
     const result = await pool.query(insertSql, [tx_ref, flw_ref, amount, currency, status, customerEmail, receivedAt, payload]);
 
+    const isNewTransaction = result.rowCount > 0;
+
     // If payment successful and we have email, attempt to update user's subscription
-    if ((status === 'successful' || status === 'completed' || status === 'success') && customerEmail) {
+    if ((status === 'successful' || status === 'completed' || status === 'success') && customerEmail && isNewTransaction) {
       // Attempt to extract plan from payload metadata or tx_ref
       let plan = null;
       if (data.meta && data.meta.plan) plan = data.meta.plan;
@@ -480,17 +616,28 @@ app.post('/api/webhook/flutterwave', async (req, res) => {
         // Upsert user: set plan, reset monthly_credit_allowance to plan amount, keep bonus_credits unchanged, set subscription_status active
         const emailLower = customerEmail.toLowerCase();
         const creditsForPlan = PLAN_CREDITS[plan];
-        const upsertSql = `
-          INSERT INTO users (email, plan, credits, monthly_credit_allowance, bonus_credits, subscription_status)
-          VALUES ($1, $2, $3, $4, $5, 'active')
-          ON CONFLICT (email) DO UPDATE SET plan = EXCLUDED.plan, monthly_credit_allowance = EXCLUDED.monthly_credit_allowance, credits = EXCLUDED.credits, subscription_status = 'active'
-          RETURNING id, email, plan, credits, monthly_credit_allowance, bonus_credits, subscription_status;
-        `;
+        const client = await pool.connect();
         try {
-          const upres = await pool.query(upsertSql, [emailLower, plan, creditsForPlan, creditsForPlan, 0]);
-          console.log('Updated user subscription from webhook:', upres.rows[0]);
+          await client.query('BEGIN');
+          // upsert user and return id and balances
+          const upsertSql = `
+            INSERT INTO users (email, plan, credits, monthly_credit_allowance, bonus_credits, subscription_status)
+            VALUES ($1, $2, $3, $4, $5, 'active')
+            ON CONFLICT (email) DO UPDATE SET plan = EXCLUDED.plan, monthly_credit_allowance = EXCLUDED.monthly_credit_allowance, credits = EXCLUDED.credits, subscription_status = 'active'
+            RETURNING id, email, plan, credits, monthly_credit_allowance, bonus_credits, subscription_status;
+          `;
+          const upres = await client.query(upsertSql, [emailLower, plan, creditsForPlan, creditsForPlan, 0]);
+          const user = upres.rows[0];
+          // record monthly_reset transaction for this user
+          const balanceAfter = (user.monthly_credit_allowance || 0) + (user.bonus_credits || 0);
+          await recordCreditTransaction({ client, user_id: user.id, transaction_type: 'monthly_reset', credits_amount: creditsForPlan, balance_after: balanceAfter, description: `Plan ${plan} purchase via ${tx_ref}` });
+          await client.query('COMMIT');
+          console.log('Updated user subscription from webhook:', user);
         } catch (err) {
+          await client.query('ROLLBACK');
           console.error('Error upserting user on webhook:', err);
+        } finally {
+          client.release();
         }
       } else if (customerEmail) {
         // Ensure user exists with email but no plan change
