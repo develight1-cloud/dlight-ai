@@ -1,0 +1,77 @@
+services:
+  - type: web
+    name: dlight-ai-backend
+    runtime: node
+    region: oregon
+    plan: standard
+    
+    # Build configuration
+    buildCommand: npm install
+    startCommand: npm start
+    
+    # Port configuration
+    port: 5001
+    
+    # Environment variables
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 5001
+      - key: ADMIN_JWT_EXPIRES
+        value: 15m
+      - key: USER_JWT_EXPIRES
+        value: 7d
+    
+    # Database configuration
+    databases:
+      - name: dlight-ai-db
+        databaseName: dlight_ai
+        user: dlight_user
+        plan: standard
+        region: oregon
+        version: "14"
+    
+    # Environment variables that reference the database
+    envVarsFromDatabase:
+      DATABASE_URL: postgresql://dlight_user:XXXXXX@dpg-XXXXXX.oregon-postgres.render.com:5432/dlight_ai
+    
+    # Secret environment variables (must be set in Render Dashboard)
+    # These should NOT be committed to the repo; set them in Render UI
+    # - JWT_SECRET
+    # - ADMIN_SECRET
+    # - FLW_PUBLIC_KEY
+    # - FLW_SECRET_KEY
+    # - FLW_SECRET_HASH
+    
+    # Health check configuration
+    healthCheckPath: /api/health
+    healthCheckInterval: 30
+    healthCheckTimeout: 5
+    
+    # Auto-deploy on push to main
+    autoDeploy: true
+    branch: main
+    
+    # Advanced settings
+    preDeployCommand: |
+      echo "Running pre-deployment checks..."
+      npm run migrate || echo "Migrations skipped"
+    
+    # Scaling configuration
+    numInstances: 1
+    
+    # Disk size (optional, for persistent storage if needed)
+    disk:
+      name: dlight-ai-disk
+      sizeGb: 10
+      
+    # Limits and timeouts
+    buildTimeout: 1800
+    deploymentTimeout: 600
+
+# Cron jobs (optional - for future use like monthly credit resets)
+# crons:
+#   - id: monthly-credit-reset
+#     schedule: "0 0 1 * *"
+#     command: curl -s https://api.dlight-ai.render.com/api/cron/reset-monthly-credits -H "Authorization: Bearer CRON_SECRET"
